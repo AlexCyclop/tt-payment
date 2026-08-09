@@ -6,8 +6,10 @@ from uuid import UUID, uuid4
 from sqlalchemy import (
     DateTime,
     Index,
+    Integer,
     Numeric,
     String,
+    Text,
     func,
 )
 from sqlalchemy import Enum as SQLEnum
@@ -15,7 +17,11 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
-from src.application.payment.enums import PaymentCurrenciesEnum, PaymentStatusesEnum
+from src.application.payment.enums import (
+    PaymentCurrenciesEnum,
+    PaymentStatusesEnum,
+    WebhookStatusesEnum,
+)
 from src.infrastructure.db.db import Base
 
 
@@ -77,7 +83,30 @@ class PaymentModel(Base):
         DateTime(timezone=True),
         nullable=True,
     )
+    webhook_status: Mapped[WebhookStatusesEnum | None] = mapped_column(
+        SQLEnum(
+            WebhookStatusesEnum,
+            name="webhook_status",
+            values_callable=lambda enum_cls: [item.value for item in enum_cls],
+        ),
+        nullable=True,
+    )
+    webhook_attempts: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default="0",
+    )
+    webhook_last_error: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+    next_webhook_retry_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
     __table_args__ = (
         Index("ix_payments_status", "status"),
         Index("ix_payments_created_at", "created_at"),
+        Index("ix_payments_webhook_retry", "webhook_status", "next_webhook_retry_at"),
     )

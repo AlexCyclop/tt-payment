@@ -1,70 +1,45 @@
-import asyncio
-import json
 import logging
-from typing import Literal, Any
-from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from datetime import UTC, datetime, timedelta
+from typing import Any, Literal
 from uuid import UUID
 
-from src.application.i_payment_publisher import IPaymentPublisher
+from src.application.i_payment_publisher import (
+    ERROR_HEADER,
+    SOURCE_HEADER,
+    IPaymentPublisher,
+)
+from src.application.i_uow import IUnitOfWork
+from src.application.i_webhook_client import IWebhookClient, WebhookDeliveryError
+from src.application.payment.enums import WebhookStatusesEnum
+from src.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-WEBHOOK_MAX_ATTEMPTS = 3
-WEBHOOK_BASE_DELAY_SECONDS = 2
-RETRYABLE_WEBHOOK_ERRORS = (RuntimeError, OSError, TimeoutError)
+WEBHOOK_SOURCE = "webhook"
 
-DeliveryStatus = Literal["delivered", "skipped", "dlq_published", "dlq_publish_failed"]
+DeliveryStatus = Literal[
+    "delivered", "skipped", "scheduled", "dlq_published", "dlq_publish_failed"
+]
 
 
 class WebhookDeliveryService:
-    def __init__(self, payment_publisher: IPaymentPublisher):
+    def __init__(
+        self,
+        unit_of_work: IUnitOfWork,
+        webhook_client: IWebhookClient,
+        payment_publisher: IPaymentPublisher,
+    ):
+        self._unit_of_work = unit_of_work
+        self._webhook_client = webhook_client
         self._payment_publisher = payment_publisher
-
-    async def _send_once(self, url: str, payload: dict[str, Any]) -> None:
-        def _post() -> None:
-            request = Request(
-                url=url,
-                data=json.dumps(payload).encode("utf-8"),
-                headers={"Content-Type": "application/json"},
-                method="POST",
-            )
-            with urlopen(request, timeout=10) as response:
-                if response.status >= 400:
-                    raise RuntimeError(f"Webhook response status: {response.status}")
-
-        try:
-            await asyncio.to_thread(_post)
-        except HTTPError as error:
-            raise RuntimeError(f"Webhook HTTP error: {error.code}") from error
-        except URLError as error:
-            raise RuntimeError(f"Webhook URL error: {error.reason}") from error
-
-    async def _send_with_retry(self, url: str, payload: dict[str, Any]) -> None:
-        last_error: Exception | None = None
-        for attempt in range(1, WEBHOOK_MAX_ATTEMPTS + 1):
-            try:
-                await self._send_once(url, payload)
-                return
-            except RETRYABLE_WEBHOOK_ERRORS as error:
-                last_error = error
-                if attempt >= WEBHOOK_MAX_ATTEMPTS:
-                    break
-                delay_seconds = WEBHOOK_BASE_DELAY_SECONDS * (2 ** (attempt - 1))
-                logger.warning(
-                    "Webhook attempt %s failed, retry in %ss: %s",
-                    attempt,
-                    delay_seconds,
-                    error,
-                )
-                await asyncio.sleep(delay_seconds)
-        raise RuntimeError(str(last_error) if last_error else "Webhook failed")
+        self._max_attempts = settings.webhook.MAX_ATTEMPTS
 
     async def deliver(
         self,
         payment_uuid: UUID,
         webhook_url: str | None,
         payload: dict[str, Any],
+        attempt: int = 1,
     ) -> DeliveryStatus:
         if not webhook_url:
             logger.info(
@@ -74,20 +49,109 @@ class WebhookDeliveryService:
             return "skipped"
 
         try:
-            await self._send_with_retry(webhook_url, payload)
-            return "delivered"
-        except RETRYABLE_WEBHOOK_ERRORS as error:
-            logger.exception("Webhook delivery failed for payment %s", payment_uuid)
-            try:
-                await self._payment_publisher.publish_dlq_payment(
-                    payment_uuid,
-                    {
-                        "payment_uuid": str(payment_uuid),
-                        "reason": f"webhook_failed: {error}",
-                        "payload": payload,
-                    },
-                )
-                return "dlq_published"
-            except RETRYABLE_WEBHOOK_ERRORS:
-                logger.exception("DLQ publish failed for payment %s", payment_uuid)
-                return "dlq_publish_failed"
+            await self._webhook_client.post(webhook_url, payload)
+        except WebhookDeliveryError as error:
+            return await self._handle_failure(payment_uuid, payload, attempt, error)
+
+        await self._save(
+            payment_uuid,
+            status=WebhookStatusesEnum.DELIVERED,
+            attempts=attempt,
+            last_error=None,
+            next_retry_at=None,
+        )
+        logger.info(
+            "Webhook for payment %s delivered on attempt %s", payment_uuid, attempt
+        )
+
+        return "delivered"
+
+    async def _handle_failure(
+        self,
+        payment_uuid: UUID,
+        payload: dict[str, Any],
+        attempt: int,
+        error: WebhookDeliveryError,
+    ) -> DeliveryStatus:
+        if attempt >= self._max_attempts:
+            await self._save(
+                payment_uuid,
+                status=WebhookStatusesEnum.FAILED,
+                attempts=attempt,
+                last_error=str(error)[:2000],
+                next_retry_at=None,
+            )
+            return await self._to_dlq(payment_uuid, payload, attempt, error)
+
+        delay_seconds = self._delay_for(attempt)
+        await self._save(
+            payment_uuid,
+            status=WebhookStatusesEnum.PENDING,
+            attempts=attempt,
+            last_error=str(error)[:2000],
+            next_retry_at=self._now() + timedelta(seconds=delay_seconds),
+        )
+        logger.warning(
+            "Webhook attempt %s/%s for payment %s failed, next try in %ss: %s",
+            attempt,
+            self._max_attempts,
+            payment_uuid,
+            delay_seconds,
+            error,
+        )
+
+        return "scheduled"
+
+    @staticmethod
+    def _delay_for(attempt: int) -> int:
+        return settings.webhook.BASE_DELAY_SECONDS * 2 ** (attempt - 1)
+
+    async def _save(
+        self,
+        payment_uuid: UUID,
+        status: WebhookStatusesEnum,
+        attempts: int,
+        last_error: str | None,
+        next_retry_at: datetime | None,
+    ) -> None:
+        async with self._unit_of_work as uow:
+            await uow.payment_manager.update_webhook_delivery(
+                payment_uuid=payment_uuid,
+                status=status,
+                attempts=attempts,
+                last_error=last_error,
+                next_retry_at=next_retry_at,
+            )
+
+    async def _to_dlq(
+        self,
+        payment_uuid: UUID,
+        payload: dict[str, Any],
+        attempt: int,
+        error: WebhookDeliveryError,
+    ) -> DeliveryStatus:
+        logger.error(
+            "Webhook delivery failed for payment %s after %s attempts: %s",
+            payment_uuid,
+            attempt,
+            error,
+        )
+
+        try:
+            await self._payment_publisher.publish_dlq_payment(
+                message_uuid=payment_uuid,
+                message_payload=payload,
+                headers={
+                    ERROR_HEADER: f"webhook_failed: {error}"[:2000],
+                    SOURCE_HEADER: WEBHOOK_SOURCE,
+                },
+            )
+        except Exception:
+            logger.exception("DLQ publish failed for payment %s", payment_uuid)
+            return "dlq_publish_failed"
+
+        return "dlq_published"
+
+    @staticmethod
+    def _now() -> datetime:
+        return datetime.now(UTC)

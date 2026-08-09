@@ -4,7 +4,11 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
-from src.application.payment.enums import PaymentCurrenciesEnum, PaymentStatusesEnum
+from src.application.payment.enums import (
+    PaymentCurrenciesEnum,
+    PaymentStatusesEnum,
+    WebhookStatusesEnum,
+)
 
 
 @dataclass
@@ -19,6 +23,10 @@ class PaymentEntity:
     webhook_url: str | None
     created_at: datetime
     processed_at: datetime | None
+    webhook_status: WebhookStatusesEnum | None = None
+    webhook_attempts: int = 0
+    webhook_last_error: str | None = None
+    next_webhook_retry_at: datetime | None = None
 
 
 @dataclass

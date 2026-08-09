@@ -13,13 +13,14 @@ class PaymentService:
         self, data: CreatePaymentRequestDTO, idempotency_key: str
     ) -> PaymentEntity:
         async with self._unit_of_work as session:
-            created_payment = await session.payment_manager.create(
+            created_payment, existed = await session.payment_manager.create(
                 data, idempotency_key
             )
 
-            await session.outbox_manager.create(
-                payment_uuid=created_payment.uuid, idempotency_key=idempotency_key
-            )
+            if not existed:
+                await session.outbox_manager.create(
+                    payment_uuid=created_payment.uuid, idempotency_key=idempotency_key
+                )
 
             return created_payment
 

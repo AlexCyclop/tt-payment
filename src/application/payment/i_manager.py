@@ -3,7 +3,7 @@ from datetime import datetime
 from uuid import UUID
 
 from src.application.payment.entities import PaymentEntity, CreatePaymentRequestDTO
-from src.application.payment.enums import PaymentStatusesEnum
+from src.application.payment.enums import PaymentStatusesEnum, WebhookStatusesEnum
 
 
 class IPaymentManager(ABC):
@@ -24,7 +24,7 @@ class IPaymentManager(ABC):
     @abstractmethod
     async def create(
         self, payment_data: CreatePaymentRequestDTO, idempotency_key: str
-    ) -> PaymentEntity:
+    ) -> tuple[PaymentEntity, bool]:
         pass
 
     @abstractmethod
@@ -33,5 +33,28 @@ class IPaymentManager(ABC):
         payment_uuid: UUID,
         status: PaymentStatusesEnum,
         processed_at: datetime,
+    ) -> None:
+        pass
+
+    @abstractmethod
+    async def get_for_webhook_retry(
+        self, now: datetime, limit: int
+    ) -> list[PaymentEntity]:
+        pass
+
+    @abstractmethod
+    async def claim_webhook_retry(
+        self, payment_uuids: list[UUID], locked_until: datetime
+    ) -> None:
+        pass
+
+    @abstractmethod
+    async def update_webhook_delivery(
+        self,
+        payment_uuid: UUID,
+        status: WebhookStatusesEnum,
+        attempts: int,
+        last_error: str | None,
+        next_retry_at: datetime | None,
     ) -> None:
         pass

@@ -6,7 +6,12 @@ from uuid import UUID
 from faststream import AckPolicy
 from faststream.rabbit import Channel, RabbitMessage
 
-from src.application.i_payment_publisher import IPaymentPublisher
+from src.application.i_payment_publisher import (
+    ATTEMPT_HEADER,
+    ERROR_HEADER,
+    SOURCE_HEADER,
+    IPaymentPublisher,
+)
 from src.application.payment.services.payment_processing import (
     PaymentProcessingRetryableError,
     PaymentProcessingService,
@@ -17,8 +22,7 @@ from src.infrastructure.rabbit.message_broker import MessageBroker
 
 logger = logging.getLogger(__name__)
 
-ATTEMPT_HEADER = "x-attempt"
-ERROR_HEADER = "x-error"
+CONSUMER_SOURCE = "consumer"
 
 
 class PaymentConsumer:
@@ -26,14 +30,14 @@ class PaymentConsumer:
         self,
         message_broker: MessageBroker,
         processing_service_factory: Callable[[], PaymentProcessingService],
-        webhook_delivery_service: WebhookDeliveryService,
+        webhook_delivery_service_factory: Callable[[], WebhookDeliveryService],
         payment_publisher: IPaymentPublisher,
     ) -> None:
         self._broker = message_broker.broker
         self._payment_queue = message_broker.payment_queue
         self._payment_exchange = message_broker.payment_exchange
         self._processing_service_factory = processing_service_factory
-        self._webhook_delivery_service = webhook_delivery_service
+        self._webhook_delivery_service_factory = webhook_delivery_service_factory
         self._payment_publisher = payment_publisher
         self._max_attempts = settings.consumer.MAX_ATTEMPTS
 
@@ -87,7 +91,7 @@ class PaymentConsumer:
 
         logger.info("Payment %s processing result: %s", payment_id, result.state)
 
-        delivery_status = await self._webhook_delivery_service.deliver(
+        delivery_status = await self._webhook_delivery_service_factory().deliver(
             payment_uuid=result.payment_id,
             webhook_url=result.webhook_url,
             payload=result.webhook_payload or {},
@@ -130,7 +134,10 @@ class PaymentConsumer:
         reason: str,
         attempt: int | None = None,
     ) -> None:
-        headers: dict[str, Any] = {ERROR_HEADER: reason[:2000]}
+        headers: dict[str, Any] = {
+            ERROR_HEADER: reason[:2000],
+            SOURCE_HEADER: CONSUMER_SOURCE,
+        }
         if attempt is not None:
             headers[ATTEMPT_HEADER] = attempt
 

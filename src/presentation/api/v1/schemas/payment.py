@@ -5,7 +5,11 @@ from uuid import UUID
 
 from pydantic import BaseModel, HttpUrl, Field, field_validator, ConfigDict
 
-from src.application.payment.enums import PaymentCurrenciesEnum, PaymentStatusesEnum
+from src.application.payment.enums import (
+    PaymentCurrenciesEnum,
+    PaymentStatusesEnum,
+    WebhookStatusesEnum,
+)
 
 
 class CreatePaymentRequestSchema(BaseModel):
@@ -35,6 +39,9 @@ class GetPaymentResponseSchema(BaseModel):
     metadata: dict[str, Any]
     status: PaymentStatusesEnum
     webhook_url: HttpUrl | None
+    webhook_status: WebhookStatusesEnum | None
+    webhook_attempts: int
+    next_webhook_retry_at: datetime | None
     created_at: datetime
     processed_at: datetime | None
     model_config = ConfigDict(from_attributes=True)

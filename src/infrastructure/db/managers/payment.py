@@ -5,7 +5,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.application.payment.entities import PaymentEntity, CreatePaymentRequestDTO
-from src.application.payment.enums import PaymentStatusesEnum
+from src.application.payment.enums import PaymentStatusesEnum, WebhookStatusesEnum
 from src.application.payment.exceptions import IdempotencyKeyAlreadyUsedException
 from src.application.payment.i_manager import IPaymentManager
 from src.infrastructure.db.models.payment import PaymentModel
@@ -28,6 +28,10 @@ class PaymentManager(IPaymentManager):
             webhook_url=payment.webhook_url,
             created_at=payment.created_at,
             processed_at=payment.processed_at,
+            webhook_status=payment.webhook_status,
+            webhook_attempts=payment.webhook_attempts,
+            webhook_last_error=payment.webhook_last_error,
+            next_webhook_retry_at=payment.next_webhook_retry_at,
         )
 
     @staticmethod
@@ -42,11 +46,11 @@ class PaymentManager(IPaymentManager):
 
     async def create(
         self, payment_data: CreatePaymentRequestDTO, idempotency_key: str
-    ) -> PaymentEntity:
+    ) -> tuple[PaymentEntity, bool]:
         if (existing := await self.get_by_idempotency_key(idempotency_key)) is not None:
             if not self.is_same_payload(existing, payment_data):
                 raise IdempotencyKeyAlreadyUsedException()
-            return existing
+            return existing, True
 
         payment = PaymentModel(
             amount=payment_data.amount,
@@ -58,11 +62,14 @@ class PaymentManager(IPaymentManager):
             webhook_url=str(payment_data.webhook_url)
             if payment_data.webhook_url
             else None,
+            webhook_status=WebhookStatusesEnum.PENDING
+            if payment_data.webhook_url
+            else None,
         )
 
         self._session.add(payment)
         await self._session.flush()
-        return self._to_entity(payment)
+        return self._to_entity(payment), False
 
     async def get_by_idempotency_key(
         self, idempotency_key: str
@@ -96,5 +103,52 @@ class PaymentManager(IPaymentManager):
             update(PaymentModel)
             .where(PaymentModel.uuid == payment_uuid)
             .values(status=status, processed_at=processed_at)
+        )
+        await self._session.execute(stmt)
+
+    async def get_for_webhook_retry(
+        self, now: datetime, limit: int
+    ) -> list[PaymentEntity]:
+        query = (
+            select(PaymentModel)
+            .where(
+                PaymentModel.webhook_status == WebhookStatusesEnum.PENDING,
+                PaymentModel.next_webhook_retry_at.is_not(None),
+                PaymentModel.next_webhook_retry_at <= now,
+            )
+            .order_by(PaymentModel.next_webhook_retry_at.asc())
+            .limit(limit)
+            .with_for_update(skip_locked=True)
+        )
+        result = await self._session.scalars(query)
+        return [self._to_entity(payment) for payment in result]
+
+    async def claim_webhook_retry(
+        self, payment_uuids: list[UUID], locked_until: datetime
+    ) -> None:
+        stmt = (
+            update(PaymentModel)
+            .where(PaymentModel.uuid.in_(payment_uuids))
+            .values(next_webhook_retry_at=locked_until)
+        )
+        await self._session.execute(stmt)
+
+    async def update_webhook_delivery(
+        self,
+        payment_uuid: UUID,
+        status: WebhookStatusesEnum,
+        attempts: int,
+        last_error: str | None,
+        next_retry_at: datetime | None,
+    ) -> None:
+        stmt = (
+            update(PaymentModel)
+            .where(PaymentModel.uuid == payment_uuid)
+            .values(
+                webhook_status=status,
+                webhook_attempts=attempts,
+                webhook_last_error=last_error,
+                next_webhook_retry_at=next_retry_at,
+            )
         )
         await self._session.execute(stmt)

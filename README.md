@@ -24,7 +24,13 @@ POST /api/v1/payments
                                                           └───┬───────┬───┘
                         обработка 2–5 сек, 90% success        │       │
                         UPDATE payments.status ◀──────────────┘       │
-                        POST webhook_url ◀────────────────────────────┘
+                        POST webhook_url (одна попытка) ◀─────────────┘
+                                    │
+                                    │ не доставлен: next_webhook_retry_at
+                                    ▼
+                          ┌────────────────────┐
+                          │   webhook-retry    │ повтор по расписанию
+                          └────────────────────┘
 ```
 
 1. `POST /api/v1/payments` в одной транзакции пишет платёж в `payments`
@@ -33,15 +39,17 @@ POST /api/v1/payments
 2. Воркер `outbox-dispatcher` опрашивает таблицу `outbox`, публикует события
    в exchange `payments` с routing key `payments.new` и помечает их published.
 3. Consumer читает очередь `payments.new`: эмулирует обработку платежа
-   (2–5 секунд, 90% успех / 10% ошибка), обновляет статус в БД и отправляет
-   webhook на `webhook_url`.
-4. Неудачная попытка уходит в очередь отложенного ретрая, окончательно
-   упавшие сообщения — в Dead Letter Queue.
+   (2–5 секунд, 90% успех / 10% ошибка), обновляет статус в БД и делает
+   одну попытку доставки webhook на `webhook_url`.
+4. Неудачная попытка обработки уходит в очередь отложенного ретрая,
+   окончательно упавшие сообщения — в Dead Letter Queue.
+5. Недоставленный webhook подхватывает воркер `webhook-retry` по
+   `next_webhook_retry_at` — consumer не ждёт повторных попыток.
 
 ## Стек
 
 FastAPI + Pydantic v2, SQLAlchemy 2.0 (async), PostgreSQL, RabbitMQ (FastStream),
-Alembic, dependency-injector, Docker + docker-compose.
+Alembic, aiohttp, dependency-injector, Docker + docker-compose.
 
 ## Быстрый старт
 
@@ -50,8 +58,8 @@ cp .env.example .env
 docker compose up --build
 ```
 
-Поднимаются пять сервисов: `payments-db`, `rabbit-mq`, `api` (миграции + uvicorn),
-`outbox-dispatcher`, `consumer`.
+Поднимаются шесть сервисов: `payments-db`, `rabbit-mq`, `api` (миграции + uvicorn),
+`outbox-dispatcher`, `consumer`, `webhook-retry`.
 
 | Сервис            | Адрес                                            |
 |-------------------|--------------------------------------------------|
@@ -71,6 +79,12 @@ docker compose up --build
 | `API_KEY`                                             | `123`        | Ключ для заголовка `X-API-Key`    |
 | `CONSUMER_MAX_ATTEMPTS`                               | `3`          | Попыток обработки до DLQ          |
 | `CONSUMER_PREFETCH_COUNT`                             | `10`         | Prefetch consumer'а               |
+| `WEBHOOK_MAX_ATTEMPTS`                                | `3`          | Попыток доставки webhook          |
+| `WEBHOOK_BASE_DELAY_SECONDS`                          | `2`          | База экспоненциальной задержки    |
+| `WEBHOOK_TIMEOUT_SECONDS`                             | `10`         | Таймаут HTTP-запроса              |
+| `WEBHOOK_RETRY_POLL_INTERVAL_SECONDS`                 | `1.0`        | Интервал опроса недоставленных    |
+| `WEBHOOK_RETRY_BATCH_SIZE`                            | `100`        | Размер пачки за итерацию          |
+| `WEBHOOK_RETRY_CLAIM_SECONDS`                         | `300`        | TTL блокировки платежа воркером   |
 | `DISPATCH_POLL_INTERVAL_SECONDS`                      | `1.0`        | Интервал опроса outbox            |
 | `MAX_OUTBOX_ATTEMPTS`                                 | `3`          | Попыток публикации события        |
 | `DISPATCH_BATCH_SIZE`                                 | `100`        | Размер пачки outbox за итерацию   |
@@ -129,6 +143,9 @@ curl http://localhost:8080/api/v1/payments/0f1a2b3c-4d5e-6f70-8192-a3b4c5d6e7f8 
   "metadata": {"user_id": 17, "source": "web"},
   "status": "succeeded",
   "webhook_url": "https://webhook.site/your-uuid",
+  "webhook_status": "delivered",
+  "webhook_attempts": 1,
+  "next_webhook_retry_at": null,
   "created_at": "2026-08-09T12:00:00Z",
   "processed_at": "2026-08-09T12:00:04Z"
 }
@@ -150,7 +167,37 @@ curl http://localhost:8080/api/v1/payments/0f1a2b3c-4d5e-6f70-8192-a3b4c5d6e7f8 
 ```
 
 Для ручной проверки удобно указать одноразовый URL с https://webhook.site.
-Если `webhook_url` не передан, платёж обрабатывается без уведомления.
+Если `webhook_url` не передан, платёж обрабатывается без уведомления,
+а `webhook_status` остаётся `null`.
+
+#### Состояние доставки
+
+Обработка платежа и доставка уведомления — разные вещи: платёж может быть
+`succeeded`, а webhook при этом не доставлен. Поэтому состояние доставки
+хранится в БД отдельно от статуса платежа и отдаётся в `GET /api/v1/payments/{id}`.
+
+| Поле                    | Значение                                                        |
+|-------------------------|-----------------------------------------------------------------|
+| `webhook_status`        | `pending` → `delivered` / `failed`; `null` — уведомление не нужно |
+| `webhook_attempts`      | Сколько попыток доставки сделано                                 |
+| `next_webhook_retry_at` | Время следующей попытки, `null` в терминальном состоянии          |
+| `webhook_last_error`    | Текст последней ошибки (не отдаётся в API)                        |
+
+Запись создаётся сразу при создании платежа (`pending`, если задан `webhook_url`)
+и обновляется после каждой попытки — короткой отдельной транзакцией,
+уже после HTTP-запроса, чтобы не держать транзакцию открытой на время сети.
+
+Consumer делает **одну** попытку доставки и не ждёт повторов: при неудаче он
+проставляет `next_webhook_retry_at` и подтверждает сообщение. Дальше платёж
+подхватывает воркер `webhook-retry` — он опрашивает `payments`, где
+`webhook_status = pending` и `next_webhook_retry_at <= now`, забирает пачку
+через `SELECT ... FOR UPDATE SKIP LOCKED`, сдвигает `next_webhook_retry_at`
+вперёд (это и есть блокировка на время работы) и коммитит транзакцию **до**
+HTTP-запроса. Тот же приём, что и в outbox-диспетчере: сеть никогда не
+происходит внутри открытой транзакции.
+
+HTTP-вызов спрятан за интерфейсом `IWebhookClient`; реализация на aiohttp
+живёт в `infrastructure/http` и переиспользует один `ClientSession`.
 
 ## Топология RabbitMQ
 
@@ -180,16 +227,34 @@ Retry-очереди никто не слушает: сообщение лежи
 
 В DLQ сообщение попадает, если на финальной попытке произошла инфраструктурная
 ошибка (недоступна БД и т.п.), если платёж не найден в БД или если тело
-сообщения не удалось разобрать. Причина пишется в заголовок `x-error`.
+сообщения не удалось разобрать.
+
+Контракт DLQ единый для всех источников: тело — то сообщение, которое не удалось
+обработать, причина и источник — в заголовках.
+
+| Заголовок  | Значение                                              |
+|------------|-------------------------------------------------------|
+| `x-error`  | Причина попадания в DLQ                                |
+| `x-source` | `consumer` — не обработали, `webhook` — не доставили   |
+| `x-attempt`| Номер попытки обработки (только для `consumer`)         |
 
 Consumer работает с `AckPolicy.MANUAL`: сообщение подтверждается только после
 того, как результат зафиксирован — обработан, переложен в retry или отправлен
 в DLQ. Если переложить сообщение не удалось, оно возвращается брокеру через
 `nack(requeue=True)` и не теряется.
 
-Доставка webhook имеет собственный retry — 3 попытки с паузами 2 и 4 секунды.
-Если все попытки исчерпаны, событие уходит в DLQ, а статус платежа остаётся
-корректным в БД.
+Доставка webhook ретраится независимо от обработки платежа — 3 попытки
+с задержками 2 и 4 секунды.
+
+| Попытка | Кто делает      | Результат ошибки                                    |
+|---------|-----------------|-----------------------------------------------------|
+| 1       | `consumer`      | `next_webhook_retry_at = now + 2s`, статус `pending` |
+| 2       | `webhook-retry` | `next_webhook_retry_at = now + 4s`, статус `pending` |
+| 3       | `webhook-retry` | `webhook_status = failed`, событие в DLQ             |
+
+Каждая попытка фиксируется в `payments` (`webhook_attempts`, `webhook_last_error`,
+`next_webhook_retry_at`). Статус самого платежа при этом не меняется — он уже
+обработан, недоставленное уведомление это отдельная сущность.
 
 ## Идемпотентность
 
@@ -210,6 +275,7 @@ poetry run alembic upgrade head
 
 poetry run uvicorn src.presentation.main:app --reload --port 8080
 poetry run python -m src.workers.dispatcher
+poetry run python -m src.workers.webhook_retry
 poetry run faststream run src.workers.payment_consumer:app
 ```
 
@@ -228,11 +294,12 @@ src/
 ├── application/            слой приложения: сущности, интерфейсы, сервисы
 │   ├── outbox/             outbox-сущность и сервис публикации событий
 │   ├── payment/            платежи: создание и обработка
-│   └── webhook/            доставка webhook с retry
+│   └── webhook/            доставка webhook и ретрай недоставленных
 ├── core/                   конфигурация и базовое исключение
 ├── infrastructure/
 │   ├── db/                 модели, менеджеры, UnitOfWork, миграции
+│   ├── http/               aiohttp-клиент для webhook
 │   └── rabbit/             топология, publisher, consumer
 ├── presentation/           FastAPI: роутеры, схемы, DI-контейнер, аутентификация
-└── workers/                точки входа воркеров: dispatcher и consumer
+└── workers/                точки входа: dispatcher, consumer, webhook-retry
 ```

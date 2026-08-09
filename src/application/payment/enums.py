@@ -11,3 +11,9 @@ class PaymentStatusesEnum(StrEnum):
     PENDING = "pending"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
+
+
+class WebhookStatusesEnum(StrEnum):
+    PENDING = "pending"
+    DELIVERED = "delivered"
+    FAILED = "failed"

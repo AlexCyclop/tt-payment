@@ -89,6 +89,20 @@ class ConsumerWorkerSettings(BaseSettings):
     PREFETCH_COUNT: int = 10
 
 
+class WebhookSettings(BaseSettings):
+    model_config = SettingsConfigDict(
+        extra="allow", env_prefix="webhook_", env_file=".env"
+    )
+
+    MAX_ATTEMPTS: int = 3
+    BASE_DELAY_SECONDS: int = 2
+    TIMEOUT_SECONDS: int = 10
+    RETRY_POLL_INTERVAL_SECONDS: float = 1.0
+    RETRY_ERROR_BACKOFF_SECONDS: float = 3.0
+    RETRY_BATCH_SIZE: int = 100
+    RETRY_CLAIM_SECONDS: int = 300
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(extra="allow", env_file=".env")
 
@@ -96,6 +110,7 @@ class Settings(BaseSettings):
     rabbit: RabbitSettings = RabbitSettings()
     dispatcher: DispatcherWorkerSettings = DispatcherWorkerSettings()
     consumer: ConsumerWorkerSettings = ConsumerWorkerSettings()
+    webhook: WebhookSettings = WebhookSettings()
 
     API_KEY: str = "123"
     CLAIM_RELEASE_SECONDS: int = 300

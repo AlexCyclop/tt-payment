@@ -37,6 +37,23 @@ services:
     networks:
       - payments-network
 
+  webhook-retry:
+    build: .
+    container_name: payments_webhook_retry
+    restart: unless-stopped
+    env_file:
+      - .env
+    command: python -m src.workers.webhook_retry
+    depends_on:
+      api:
+        condition: service_started
+      payments-db:
+        condition: service_healthy
+      rabbit-mq:
+        condition: service_healthy
+    networks:
+      - payments-network
+
   consumer:
     build: .
     container_name: payments_consumer

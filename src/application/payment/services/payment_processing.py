@@ -7,6 +7,7 @@ from uuid import UUID
 
 from src.application.i_uow import IUnitOfWork
 from src.application.payment.enums import PaymentStatusesEnum
+from src.application.webhook.payload import build_webhook_payload
 
 ProcessingState = Literal["processed", "already_processed", "not_found", "failed"]
 
@@ -29,16 +30,6 @@ class PaymentProcessingResult:
 
 def _utc_now() -> datetime:
     return datetime.now(UTC)
-
-
-def _webhook_body(
-    payment_id: UUID, status: str, processed_at: datetime | None
-) -> dict[str, Any]:
-    return {
-        "payment_id": str(payment_id),
-        "status": status,
-        "processed_at": processed_at.isoformat() if processed_at else None,
-    }
 
 
 class PaymentProcessingService:
@@ -65,7 +56,7 @@ class PaymentProcessingService:
                     state="already_processed",
                     payment_id=payment.uuid,
                     webhook_url=payment.webhook_url,
-                    webhook_payload=_webhook_body(
+                    webhook_payload=build_webhook_payload(
                         payment_id=payment.uuid,
                         status=payment.status.value,
                         processed_at=payment.processed_at,
@@ -113,7 +104,7 @@ class PaymentProcessingService:
             state=state,
             payment_id=payment_uuid,
             webhook_url=webhook_url,
-            webhook_payload=_webhook_body(
+            webhook_payload=build_webhook_payload(
                 payment_id=payment_uuid,
                 status=status.value,
                 processed_at=processed_at,

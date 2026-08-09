@@ -2,6 +2,10 @@ from abc import ABC, abstractmethod
 from typing import Any
 from uuid import UUID
 
+ATTEMPT_HEADER = "x-attempt"
+ERROR_HEADER = "x-error"
+SOURCE_HEADER = "x-source"
+
 
 class IPaymentPublisher(ABC):
     @abstractmethod
