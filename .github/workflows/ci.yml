@@ -1,0 +1,28 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install Poetry
+        run: pip install poetry==2.1.2
+
+      - name: Install dependencies
+        run: poetry install --with dev --no-root --no-interaction
+
+      - name: Ruff check
+        run: poetry run ruff check src
+
+      - name: Ruff format
+        run: poetry run ruff format src --check
