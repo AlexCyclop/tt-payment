@@ -53,8 +53,6 @@ class Container(containers.DeclarativeContainer):
     payment_consumer: providers.Singleton[PaymentConsumer] = providers.Singleton(
         PaymentConsumer,
         message_broker=rabbit.broker,
-        # сообщения обрабатываются конкурентно, поэтому каждому нужен свой
-        # UnitOfWork: инжектим фабрику сервиса, а не готовый инстанс
         processing_service_factory=payment_processing_service.provider,
         webhook_delivery_service=webhook_delivery_service,
         payment_publisher=rabbit.publisher,

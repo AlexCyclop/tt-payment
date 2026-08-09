@@ -36,5 +36,5 @@ class GetPaymentResponseSchema(BaseModel):
     status: PaymentStatusesEnum
     webhook_url: HttpUrl | None
     created_at: datetime
-    processed_at: datetime
+    processed_at: datetime | None
     model_config = ConfigDict(from_attributes=True)

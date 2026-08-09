@@ -4,16 +4,6 @@ from src.core.config import settings
 
 
 class MessageBroker:
-    """Топология RabbitMQ для платежей.
-
-    payments (exchange) -> payments.new (основная очередь)
-    payments.dlx (exchange) -> payments.new.retry.N (очереди отложенного ретрая, x-message-ttl)
-                            -> payments.new.dlq (окончательно упавшие сообщения)
-
-    Retry-очереди никто не слушает: по истечении TTL сообщение дохнет и по
-    dead-letter-правилам возвращается в payments -> payments.new.
-    """
-
     def __init__(self) -> None:
         self.broker = RabbitBroker(settings.rabbit.rabbit_url)
 

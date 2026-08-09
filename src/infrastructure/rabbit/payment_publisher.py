@@ -53,10 +53,6 @@ class PaymentPublisher(IPaymentPublisher):
         retry_level: int,
         headers: dict[str, Any] | None = None,
     ) -> None:
-        """Кладёт сообщение в очередь отложенного ретрая соответствующего уровня.
-
-        retry_level нумеруется с единицы; уровни описаны в RabbitSettings.retry_levels.
-        """
         retry_levels = settings.rabbit.retry_levels
         if not 1 <= retry_level <= len(retry_levels):
             raise ValueError(f"Unknown retry level: {retry_level}")

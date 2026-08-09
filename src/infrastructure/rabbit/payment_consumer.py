@@ -22,13 +22,6 @@ ERROR_HEADER = "x-error"
 
 
 class PaymentConsumer:
-    """Единственный обработчик очереди payments.new.
-
-    Забирает сообщение, эмулирует обработку платежа, обновляет статус в БД
-    и отправляет webhook. Неудачная попытка уходит в очередь отложенного
-    ретрая; после MAX_ATTEMPTS попыток сообщение отправляется в DLQ.
-    """
-
     def __init__(
         self,
         message_broker: MessageBroker,
@@ -122,8 +115,6 @@ class PaymentConsumer:
                 headers={ATTEMPT_HEADER: attempt + 1, ERROR_HEADER: reason[:2000]},
             )
         except Exception:
-            # не смогли переложить в retry-очередь — возвращаем сообщение брокеру,
-            # чтобы не потерять его
             logger.exception(
                 "Failed to schedule retry for message %s", message.message_id
             )

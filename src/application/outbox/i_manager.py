@@ -21,7 +21,7 @@ class IOutboxManager(ABC):
         pass
 
     @abstractmethod
-    async def mark_published(self, outbox_uuid: UUID, now: datetime) -> None:
+    async def mark_published(self, outbox_uuids: list[UUID], now: datetime) -> None:
         pass
 
     @abstractmethod

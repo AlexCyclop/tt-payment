@@ -2,6 +2,7 @@ from uuid import UUID
 
 from src.application.i_uow import IUnitOfWork
 from src.application.payment.entities import PaymentEntity, CreatePaymentRequestDTO
+from src.application.payment.exceptions import PaymentNotFound
 
 
 class PaymentService:
@@ -22,6 +23,9 @@ class PaymentService:
 
             return created_payment
 
-    async def get_payment(self, payment_id: UUID) -> PaymentEntity | None:
+    async def get_payment(self, payment_id: UUID) -> PaymentEntity:
         async with self._unit_of_work as session:
-            return await session.payment_manager.get_by_id(payment_id)
+            payment = await session.payment_manager.get_by_id(payment_id)
+            if not payment:
+                raise PaymentNotFound()
+            return payment

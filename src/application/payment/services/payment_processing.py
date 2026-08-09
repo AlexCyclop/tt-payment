@@ -51,12 +51,6 @@ class PaymentProcessingService:
         *,
         final_attempt: bool = False,
     ) -> PaymentProcessingResult:
-        """Эмулирует поход во внешний платёжный шлюз и фиксирует результат.
-
-        На неудачной попытке бросает PaymentProcessingRetryableError, чтобы consumer
-        отправил сообщение в отложенный ретрай. На последней попытке (final_attempt)
-        платёж переводится в терминальный статус failed.
-        """
         await asyncio.sleep(
             random.uniform(GATEWAY_MIN_LATENCY_SECONDS, GATEWAY_MAX_LATENCY_SECONDS)
         )
@@ -66,7 +60,6 @@ class PaymentProcessingService:
             if payment is None:
                 return PaymentProcessingResult(state="not_found", payment_id=payment_id)
 
-            # защита от повторной обработки одного и того же платежа
             if payment.processed_at is not None:
                 return PaymentProcessingResult(
                     state="already_processed",
@@ -79,7 +72,6 @@ class PaymentProcessingService:
                     ),
                 )
 
-            # эмуляция 90% успеха и 10% фейла
             if random.random() >= GATEWAY_SUCCESS_RATE:
                 if not final_attempt:
                     raise PaymentProcessingRetryableError(

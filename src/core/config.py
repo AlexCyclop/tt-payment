@@ -57,7 +57,6 @@ class RabbitSettings(BaseSettings):
 
     @property
     def retry_levels(self) -> tuple[RetryLevel, ...]:
-        """Очереди отложенного ретрая: (имя, routing key, задержка в мс)."""
         return (
             (
                 self.PAYMENTS_RETRY_1_QUEUE_NAME,

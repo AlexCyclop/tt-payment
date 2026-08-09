@@ -30,11 +30,23 @@ class PaymentManager(IPaymentManager):
             processed_at=payment.processed_at,
         )
 
+    @staticmethod
+    def is_same_payload(existing: PaymentEntity, data: CreatePaymentRequestDTO) -> bool:
+        return (
+            existing.amount == data.amount
+            and existing.currency == data.currency
+            and existing.description == data.description
+            and existing.metadata == data.metadata
+            and existing.webhook_url == data.webhook_url
+        )
+
     async def create(
         self, payment_data: CreatePaymentRequestDTO, idempotency_key: str
     ) -> PaymentEntity:
-        if (await self.get_by_idempotency_key(idempotency_key)) is not None:
-            raise IdempotencyKeyAlreadyUsedException()
+        if (existing := await self.get_by_idempotency_key(idempotency_key)) is not None:
+            if not self.is_same_payload(existing, payment_data):
+                raise IdempotencyKeyAlreadyUsedException()
+            return existing
 
         payment = PaymentModel(
             amount=payment_data.amount,

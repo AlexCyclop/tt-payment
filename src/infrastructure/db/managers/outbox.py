@@ -82,10 +82,10 @@ class OutboxManager(IOutboxManager):
         )
         await self._session.execute(stmt)
 
-    async def mark_published(self, message_uuid: UUID, now: datetime) -> None:
+    async def mark_published(self, outbox_uuids: list[UUID], now: datetime) -> None:
         stmt = (
             update(OutboxModel)
-            .where(OutboxModel.uuid == message_uuid)
+            .where(OutboxModel.uuid.in_(outbox_uuids))
             .values(
                 status=OutboxStatusesEnum.PUBLISHED,
                 published_at=now,
