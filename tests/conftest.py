@@ -32,9 +32,19 @@ def payment_manager() -> AsyncMock:
 
 
 @pytest.fixture
-def unit_of_work(payment_manager: AsyncMock) -> AsyncMock:
+def outbox_manager() -> AsyncMock:
+    manager = AsyncMock()
+    manager.mark_published = AsyncMock(return_value=1)
+    manager.mark_failed = AsyncMock(return_value=1)
+    manager.reschedule = AsyncMock(return_value=1)
+    return manager
+
+
+@pytest.fixture
+def unit_of_work(payment_manager: AsyncMock, outbox_manager: AsyncMock) -> AsyncMock:
     uow = AsyncMock()
     uow.payment_manager = payment_manager
+    uow.outbox_manager = outbox_manager
     uow.__aenter__ = AsyncMock(return_value=uow)
     uow.__aexit__ = AsyncMock(return_value=None)
     return uow

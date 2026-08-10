@@ -21,11 +21,24 @@ class IOutboxManager(ABC):
         pass
 
     @abstractmethod
-    async def mark_published(self, outbox_uuids: list[UUID], now: datetime) -> None:
+    async def mark_published(
+        self, outbox_uuids: list[UUID], now: datetime, claimed_until: datetime
+    ) -> int:
         pass
 
     @abstractmethod
     async def mark_failed(
-        self, outbox_uuid: UUID, attempts: int, error: str, now: datetime
-    ) -> None:
+        self, outbox_uuid: UUID, attempts: int, error: str, claimed_until: datetime
+    ) -> int:
+        pass
+
+    @abstractmethod
+    async def reschedule(
+        self,
+        outbox_uuid: UUID,
+        attempts: int,
+        error: str,
+        next_retry_at: datetime,
+        claimed_until: datetime,
+    ) -> int:
         pass

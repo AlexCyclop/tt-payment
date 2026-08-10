@@ -117,6 +117,7 @@ class Settings(BaseSettings):
     DISPATCH_BATCH_SIZE: int = 100
     MAX_OUTBOX_ATTEMPTS: int = 3
     OUTBOX_RETRY_BASE_DELAY_SECONDS: int = 2
+    OUTBOX_MAX_RETRY_DELAY_SECONDS: int = 300
 
     @property
     def NEW_PAYMENTS_TOPIC(self) -> str:

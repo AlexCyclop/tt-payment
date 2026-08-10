@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import select, or_, and_, update
@@ -82,10 +82,23 @@ class OutboxManager(IOutboxManager):
         )
         await self._session.execute(stmt)
 
-    async def mark_published(self, outbox_uuids: list[UUID], now: datetime) -> None:
+    def _owned(self, outbox_uuid: UUID, claimed_until: datetime):
+        return and_(
+            OutboxModel.uuid == outbox_uuid,
+            OutboxModel.status == OutboxStatusesEnum.PROCESSING,
+            OutboxModel.locked_until == claimed_until,
+        )
+
+    async def mark_published(
+        self, outbox_uuids: list[UUID], now: datetime, claimed_until: datetime
+    ) -> int:
         stmt = (
             update(OutboxModel)
-            .where(OutboxModel.uuid.in_(outbox_uuids))
+            .where(
+                OutboxModel.uuid.in_(outbox_uuids),
+                OutboxModel.status == OutboxStatusesEnum.PROCESSING,
+                OutboxModel.locked_until == claimed_until,
+            )
             .values(
                 status=OutboxStatusesEnum.PUBLISHED,
                 published_at=now,
@@ -94,30 +107,44 @@ class OutboxManager(IOutboxManager):
                 last_error=None,
             )
         )
-        await self._session.execute(stmt)
+        result = await self._session.execute(stmt)
+        return result.rowcount
 
     async def mark_failed(
-        self, outbox_uuid: UUID, attempts: int, error: str, now: datetime
-    ) -> None:
-        if attempts >= settings.MAX_OUTBOX_ATTEMPTS:
-            status = OutboxStatusesEnum.FAILED
-            next_retry_at = None
-        else:
-            status = OutboxStatusesEnum.PENDING
-            delay_seconds = settings.OUTBOX_RETRY_BASE_DELAY_SECONDS * (
-                2 ** (attempts - 1)
-            )
-            next_retry_at = now + timedelta(seconds=delay_seconds)
-
+        self, outbox_uuid: UUID, attempts: int, error: str, claimed_until: datetime
+    ) -> int:
         stmt = (
             update(OutboxModel)
-            .where(OutboxModel.uuid == outbox_uuid)
+            .where(self._owned(outbox_uuid, claimed_until))
             .values(
-                status=status,
+                status=OutboxStatusesEnum.FAILED,
+                attempts=attempts,
+                last_error=error,
+                locked_until=None,
+                next_retry_at=None,
+            )
+        )
+        result = await self._session.execute(stmt)
+        return result.rowcount
+
+    async def reschedule(
+        self,
+        outbox_uuid: UUID,
+        attempts: int,
+        error: str,
+        next_retry_at: datetime,
+        claimed_until: datetime,
+    ) -> int:
+        stmt = (
+            update(OutboxModel)
+            .where(self._owned(outbox_uuid, claimed_until))
+            .values(
+                status=OutboxStatusesEnum.PENDING,
                 attempts=attempts,
                 last_error=error,
                 locked_until=None,
                 next_retry_at=next_retry_at,
             )
         )
-        await self._session.execute(stmt)
+        result = await self._session.execute(stmt)
+        return result.rowcount
