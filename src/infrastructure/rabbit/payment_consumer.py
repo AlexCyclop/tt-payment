@@ -91,12 +91,13 @@ class PaymentConsumer:
 
         logger.info("Payment %s processing result: %s", payment_id, result.state)
 
-        delivery_status = await self._webhook_delivery_service_factory().deliver(
-            payment_uuid=result.payment_id,
-            webhook_url=result.webhook_url,
-            payload=result.webhook_payload or {},
-        )
-        logger.info("Payment %s webhook delivery: %s", payment_id, delivery_status)
+        if result.state in ("processed", "failed"):
+            delivery_status = await self._webhook_delivery_service_factory().deliver(
+                payment_uuid=result.payment_id,
+                webhook_url=result.webhook_url,
+                payload=result.webhook_payload or {},
+            )
+            logger.info("Payment %s webhook delivery: %s", payment_id, delivery_status)
 
         await message.ack()
 

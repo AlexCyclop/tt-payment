@@ -56,5 +56,5 @@ class IPaymentManager(ABC):
         attempts: int,
         last_error: str | None,
         next_retry_at: datetime | None,
-    ) -> None:
+    ) -> bool:
         pass

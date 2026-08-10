@@ -1,7 +1,8 @@
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import select, update
+from sqlalchemy import or_, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.application.payment.entities import PaymentEntity, CreatePaymentRequestDTO
@@ -68,7 +69,17 @@ class PaymentManager(IPaymentManager):
         )
 
         self._session.add(payment)
-        await self._session.flush()
+        try:
+            await self._session.flush()
+        except IntegrityError:
+            await self._session.rollback()
+            existing = await self.get_by_idempotency_key(idempotency_key)
+            if existing is None:
+                raise
+            if not self.is_same_payload(existing, payment_data):
+                raise IdempotencyKeyAlreadyUsedException()
+            return existing, True
+
         return self._to_entity(payment), False
 
     async def get_by_idempotency_key(
@@ -140,10 +151,16 @@ class PaymentManager(IPaymentManager):
         attempts: int,
         last_error: str | None,
         next_retry_at: datetime | None,
-    ) -> None:
+    ) -> bool:
         stmt = (
             update(PaymentModel)
-            .where(PaymentModel.uuid == payment_uuid)
+            .where(
+                PaymentModel.uuid == payment_uuid,
+                or_(
+                    PaymentModel.webhook_status == WebhookStatusesEnum.PENDING,
+                    PaymentModel.webhook_status.is_(None),
+                ),
+            )
             .values(
                 webhook_status=status,
                 webhook_attempts=attempts,
@@ -151,4 +168,5 @@ class PaymentManager(IPaymentManager):
                 next_webhook_retry_at=next_retry_at,
             )
         )
-        await self._session.execute(stmt)
+        result = await self._session.execute(stmt)
+        return result.rowcount > 0

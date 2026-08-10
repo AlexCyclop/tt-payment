@@ -76,7 +76,7 @@ docker compose up --build
 | `POSTGRES_DB` / `POSTGRES_USER` / `POSTGRES_PASSWORD` | —            | БД и учётные данные               |
 | `RABBIT_HOST` / `RABBIT_PORT`                         | —            | Хост и порт RabbitMQ              |
 | `RABBIT_USER` / `RABBIT_PASSWORD`                     | —            | Учётные данные RabbitMQ           |
-| `API_KEY`                                             | `123`        | Ключ для заголовка `X-API-Key`    |
+| `API_KEY`                                             | —            | Ключ для заголовка `X-API-Key` (обязателен) |
 | `CONSUMER_MAX_ATTEMPTS`                               | `3`          | Попыток обработки до DLQ          |
 | `CONSUMER_PREFETCH_COUNT`                             | `10`         | Prefetch consumer'а               |
 | `WEBHOOK_MAX_ATTEMPTS`                                | `3`          | Попыток доставки webhook          |
@@ -87,6 +87,7 @@ docker compose up --build
 | `WEBHOOK_RETRY_CLAIM_SECONDS`                         | `300`        | TTL блокировки платежа воркером   |
 | `DISPATCH_POLL_INTERVAL_SECONDS`                      | `1.0`        | Интервал опроса outbox            |
 | `MAX_OUTBOX_ATTEMPTS`                                 | `3`          | Попыток публикации события        |
+| `OUTBOX_RETRY_BASE_DELAY_SECONDS`                     | `2`          | База экспоненциальной задержки outbox |
 | `DISPATCH_BATCH_SIZE`                                 | `100`        | Размер пачки outbox за итерацию   |
 | `CLAIM_RELEASE_SECONDS`                               | `300`        | TTL блокировки записи outbox      |
 
@@ -160,11 +161,14 @@ curl http://localhost:8080/api/v1/payments/0f1a2b3c-4d5e-6f70-8192-a3b4c5d6e7f8 
 
 ```json
 {
+  "delivery_id": "0f1a2b3c-4d5e-6f70-8192-a3b4c5d6e7f8",
   "payment_id": "0f1a2b3c-4d5e-6f70-8192-a3b4c5d6e7f8",
   "status": "succeeded",
   "processed_at": "2026-08-09T12:00:04Z"
 }
 ```
+
+`delivery_id` совпадает с `payment_id` и предназначен для дедупликации на стороне получателя.
 
 Для ручной проверки удобно указать одноразовый URL с https://webhook.site.
 Если `webhook_url` не передан, платёж обрабатывается без уведомления,

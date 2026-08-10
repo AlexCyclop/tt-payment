@@ -48,6 +48,24 @@ class WebhookDeliveryService:
             )
             return "skipped"
 
+        async with self._unit_of_work as uow:
+            payment = await uow.payment_manager.get_by_id(payment_uuid)
+            if payment is None:
+                logger.warning(
+                    "Payment %s not found for webhook delivery", payment_uuid
+                )
+                return "skipped"
+            if payment.webhook_status in (
+                WebhookStatusesEnum.DELIVERED,
+                WebhookStatusesEnum.FAILED,
+            ):
+                logger.info(
+                    "Webhook for payment %s already in terminal state %s, skipping",
+                    payment_uuid,
+                    payment.webhook_status,
+                )
+                return "skipped"
+
         try:
             await self._webhook_client.post(webhook_url, payload)
         except WebhookDeliveryError as error:
@@ -113,15 +131,22 @@ class WebhookDeliveryService:
         attempts: int,
         last_error: str | None,
         next_retry_at: datetime | None,
-    ) -> None:
+    ) -> bool:
         async with self._unit_of_work as uow:
-            await uow.payment_manager.update_webhook_delivery(
+            updated = await uow.payment_manager.update_webhook_delivery(
                 payment_uuid=payment_uuid,
                 status=status,
                 attempts=attempts,
                 last_error=last_error,
                 next_retry_at=next_retry_at,
             )
+        if not updated:
+            logger.warning(
+                "Webhook delivery state for payment %s was not updated "
+                "(likely already in terminal state)",
+                payment_uuid,
+            )
+        return updated
 
     async def _to_dlq(
         self,

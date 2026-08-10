@@ -25,5 +25,7 @@ class IOutboxManager(ABC):
         pass
 
     @abstractmethod
-    async def mark_failed(self, outbox_uuid: UUID, attempts: int, error: str) -> None:
+    async def mark_failed(
+        self, outbox_uuid: UUID, attempts: int, error: str, now: datetime
+    ) -> None:
         pass

@@ -55,12 +55,6 @@ class PaymentProcessingService:
                 return PaymentProcessingResult(
                     state="already_processed",
                     payment_id=payment.uuid,
-                    webhook_url=payment.webhook_url,
-                    webhook_payload=build_webhook_payload(
-                        payment_id=payment.uuid,
-                        status=payment.status.value,
-                        processed_at=payment.processed_at,
-                    ),
                 )
 
             if random.random() >= GATEWAY_SUCCESS_RATE:

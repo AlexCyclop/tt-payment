@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from uuid import UUID
 
 from sqlalchemy import select, or_, and_, update
@@ -96,16 +96,28 @@ class OutboxManager(IOutboxManager):
         )
         await self._session.execute(stmt)
 
-    async def mark_failed(self, outbox_uuid: UUID, attempts: int, error: str) -> None:
+    async def mark_failed(
+        self, outbox_uuid: UUID, attempts: int, error: str, now: datetime
+    ) -> None:
+        if attempts >= settings.MAX_OUTBOX_ATTEMPTS:
+            status = OutboxStatusesEnum.FAILED
+            next_retry_at = None
+        else:
+            status = OutboxStatusesEnum.PENDING
+            delay_seconds = settings.OUTBOX_RETRY_BASE_DELAY_SECONDS * (
+                2 ** (attempts - 1)
+            )
+            next_retry_at = now + timedelta(seconds=delay_seconds)
+
         stmt = (
             update(OutboxModel)
             .where(OutboxModel.uuid == outbox_uuid)
             .values(
-                status=OutboxStatusesEnum.FAILED,
+                status=status,
                 attempts=attempts,
                 last_error=error,
                 locked_until=None,
-                next_retry_at=None,
+                next_retry_at=next_retry_at,
             )
         )
         await self._session.execute(stmt)

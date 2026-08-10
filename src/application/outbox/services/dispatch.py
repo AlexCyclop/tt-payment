@@ -102,6 +102,7 @@ class OutboxDispatchService:
                     failure.outbox_uuid,
                     attempts=failure.attempts,
                     error=failure.error,
+                    now=self._now(),
                 )
 
     @staticmethod

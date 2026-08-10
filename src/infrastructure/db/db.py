@@ -11,7 +11,9 @@ class Base(DeclarativeBase):
 class Database:
     def __init__(self, db_settings: DBSettings = settings.db):
         self._engine: asyncio.AsyncEngine = asyncio.create_async_engine(
-            db_settings.postgres_url
+            db_settings.postgres_url,
+            pool_pre_ping=True,
+            pool_recycle=3600,
         )
         self._session_factory = asyncio.async_sessionmaker(
             bind=self._engine, expire_on_commit=False

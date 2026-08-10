@@ -36,10 +36,3 @@ class CreatePaymentRequestDTO:
     description: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     webhook_url: str | None = None
-
-
-@dataclass
-class CreatePaymentResponseDTO:
-    uuid: UUID
-    status: PaymentStatusesEnum
-    created_at: datetime

@@ -112,10 +112,11 @@ class Settings(BaseSettings):
     consumer: ConsumerWorkerSettings = ConsumerWorkerSettings()
     webhook: WebhookSettings = WebhookSettings()
 
-    API_KEY: str = "123"
+    API_KEY: str
     CLAIM_RELEASE_SECONDS: int = 300
     DISPATCH_BATCH_SIZE: int = 100
     MAX_OUTBOX_ATTEMPTS: int = 3
+    OUTBOX_RETRY_BASE_DELAY_SECONDS: int = 2
 
     @property
     def NEW_PAYMENTS_TOPIC(self) -> str:
